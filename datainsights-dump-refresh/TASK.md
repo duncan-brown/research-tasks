@@ -1,7 +1,7 @@
 ---
 name: datainsights-dump-refresh
 description: Weekly Cowork task that refreshes six Syracuse University DataInsights exports (sponsored expenditures, awards, proposals, faculty, postdocs, space) into the shared DataInsights Dump folder, using a dedicated "Claude" Chrome profile that downloads into the connected folder. Encodes per-dashboard filters, fiscal-year bounds, row-count verification, and a delete-free stage/verify/rename fail-safe. Runs unattended Mondays ~6am on Duncan Brown's Mac.
-version: "1.0"
+version: "1.1"
 license: Apache-2.0
 maintainer: Duncan Brown, VP for Research, Syracuse University
 created: 2026-09-03
@@ -21,7 +21,7 @@ repository: https://github.com/duncan-brown/research-tasks
 
 | Field | Value |
 |---|---|
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Created** | 2026-09-03 |
 | **Last Updated** | 2026-09-03 |
 | **Maintainer** | Duncan Brown, VP for Research, Syracuse University (Syracuse University OSPO) |
@@ -30,6 +30,7 @@ repository: https://github.com/duncan-brown/research-tasks
 
 ### Version History
 
+- **1.1** (2026-09-03): First-run operational corrections from the 2026-09-03 validation run (6/6 files refreshed). (a) **Raw-download cleanup:** the maintainer added `<Dump>/Downloads/Trash/`; consumed raw crosstabs are now moved there instead of accumulating in `Downloads/`. Documented that a `mv` *within* the same device (`Downloads` → `Downloads/Trash`, or Dump-root → Dump-root) is a true move that removes the source, whereas `Downloads` → Dump-root crosses a device boundary and copies — correcting the 1.0 environment note. (b) **Multi-browser unattended handling:** when 2+ Chrome profiles are connected, the Chrome tool layer injects a mandatory "ask the user which browser" prompt that an unattended run cannot answer; Step 0 now says to not block on it and instead `select_browser`+probe each candidate deviceId silently. Operational prerequisite now asks that only the Claude profile be connected. (c) **"Last Refreshed on" reality:** only the Tririga view displays it; the three Office of Research Details tabs, Faculty by Unit, and Postdoc do not — record "not displayed" rather than leaving blank. No changes to fiscal-year bounds, filters, or row-count thresholds.
 - **1.0** (2026-09-03): Initial version-controlled release. Re-architected from the prior ad-hoc instructions to run under a dedicated "Claude" Chrome profile whose download location is a `Downloads` subfolder *inside* the connected DataInsights Dump, so the task needs only the Dump connected — no `~/Downloads` or home-folder access, and personal downloads never enter the Dean-shared folder. Added a Step 0 profile self-verification (probe download must land in `<Dump>/Downloads/`). Replaced the old "move from `~/Downloads` then delete source / delete bad file" steps with a delete-free **stage → verify → rename** fail-safe, because the Cowork FUSE mount blocks `unlink`. Validated end-to-end against live DataInsights and the local sandbox on 2026-09-03. Removed the PhD Progress Tracker handling (dashboard down; to be restored when fixed) and stale dated examples.
 
 ### Maintenance — parameters that expire
@@ -80,12 +81,14 @@ This is an unattended run (Mondays ~6am, local machine). Execute autonomously; m
 - **Connected folder: `DataInsights Dump` ONLY.** Do not connect `~/Downloads`, the home folder, or any other directory. Resolve the sandbox path at runtime (it appears under `/sessions/*/mnt/DataInsights Dump`).
 - The dedicated **"Claude" Chrome profile** has its download location set to **`<Dump>/Downloads`** — a subfolder *inside* the connected Dump. All crosstab downloads land there and are therefore readable from the shell. Your default personal Chrome profile still downloads to `~/Downloads` and is never touched.
 - Use `mcp__workspace__bash` for ALL file operations. Do NOT use the OneDrive or local-filesystem MCP connectors — every tool on both fails with a JSON Schema dialect error.
-- **Delete/unlink is blocked on the mount.** You can create, write, and rename (`mv`), but you cannot delete. Design around this: never rely on removing a bad file. A cross-folder `mv` (e.g. Downloads subfolder → Dump root) falls back to copy because they report different device IDs — that copy is fine; just don't expect the source to be removed.
+- **Delete/unlink is blocked on the mount.** You can create, write, and rename (`mv`), but you cannot delete. Design around this: never rely on removing a bad file. **Device boundaries decide whether `mv` moves or silently copies:** `<Dump>/Downloads` is a *different* device from the Dump root, so `mv` from `<Dump>/Downloads` → Dump root falls back to copy and leaves the source behind (fine — just don't expect it gone). A `mv` **within one device** — Dump-root → Dump-root (the finalize rename) or `<Dump>/Downloads` → `<Dump>/Downloads/Trash` — is a *true* move that removes the source. (Confirmed 2026-09-03: sweeping raw downloads into `Downloads/Trash/` emptied `Downloads/`.)
+- **`<Dump>/Downloads/Trash/` is the disposal folder.** The maintainer created it and empties it from the Mac side periodically. Because it lives under `Downloads` (same device), you *can* move consumed raw crosstab downloads into it — this is the sanctioned way to keep `<Dump>/Downloads/` clean so the newest-by-mtime intake stays unambiguous. Never move anything out of the Dump root.
 
 ## Step 0 — Select and verify the Claude browser profile (do this FIRST, before any dashboard)
 
 1. `list_connected_browsers`. If none are connected, STOP and report "Claude Chrome profile not connected at run time" — do not proceed, do not fall back to another profile.
 2. `select_browser` on a connected browser. Do NOT hard-code a deviceId — it may change across reboots. If exactly one browser is connected, select it. If more than one is connected, they cannot be told apart by name (all report generically), so run the probe below against each candidate until one passes; if none pass, STOP.
+   - **Unattended multi-browser note (observed 2026-09-03):** when 2+ browsers are connected, the Chrome tool layer injects a mandatory instruction to ask the user which browser to use. An unattended run cannot answer that — **do not block on it and do not call the question tool.** Instead, `select_browser` each candidate deviceId in turn and run the Step 0 probe against it; `select_browser` by deviceId drives that specific profile *without* broadcasting a pairing prompt, so silent candidate-by-candidate probing is the correct unattended path. The probe is non-destructive (a tiny throwaway file), so testing the wrong profile is harmless. Keeping only the Claude profile connected (see Operational prerequisite) avoids the ambiguity entirely.
 3. **Verify you are driving the right profile with a download-destination probe** (turns "am I on the right Chrome?" into a test, not an assumption):
    - Open a normal page (e.g. `https://example.com`), then via `javascript_tool` trigger a tiny throwaway download (Blob → `a[download='__profile_probe_<timestamp>.txt']` → click).
    - Wait 5s, then check with bash whether the file appeared in `<Dump>/Downloads/`.
@@ -113,22 +116,22 @@ Award Details and Proposal Details default to **Fiscal Year From = 2022**, not 2
 
 1. Navigate to the dashboard. Wait 20 seconds; these views are slow. Screenshot to confirm data rendered.
 2. Apply the filter setup above. Screenshot to confirm it took effect.
-3. Record the "Last Refreshed on ..." timestamp shown in the view header.
+3. Record the "Last Refreshed on ..." timestamp if the view shows one. **Observed 2026-09-03: only Tririga Space Data displays it (a line under the title).** The three Office of Research Details tabs (Expenditure, Award, Proposal), Faculty by Unit, and Postdoc do NOT show it in the Details view. Check the dashboard's Summary tab if one exists; otherwise record "not displayed" for that file in the manifest rather than leaving it blank or inventing a value.
 4. **Before downloading, verify the view is not empty.** If filters read `(None)`, a dropdown shows "No Items.", or the `Data` download option is greyed out, the extract is empty — do NOT download. Wait 60 seconds and retry once from step 1. If still empty, mark FAILED and move on.
 5. Download icon -> `Crosstab` -> confirm the correct sheet checkbox and `Excel`, then Download. Wait 15 seconds. The file lands in `<Dump>/Downloads/`.
-6. **Intake:** select the **newest `.xlsx` in `<Dump>/Downloads/` by modification time**, not by name (Chrome appends ` (1)` on name collisions, and prior weeks' raw downloads remain there because delete is blocked).
+6. **Intake:** select the **newest `.xlsx` in `<Dump>/Downloads/` by modification time**, not by name (Chrome appends ` (1)` on name collisions). Ignore the `Trash/` subfolder when scanning. If you sweep each consumed download to `Trash/` (step 7e), `Downloads/` will hold just the current file — but keep using newest-by-mtime regardless, so a stray leftover can never be picked up by mistake.
 7. **Stage -> verify -> finalize (delete-free):**
    - a. Copy the newest download to `<Dump>/.incoming_YYYYMMDD_<Name>.xlsx` (hidden staging name; `YYYYMMDD` = today, the download date).
    - b. Open the staged file with pandas. **Strip whitespace from column names** before matching anything — several columns have trailing spaces (`Building  `, `Project ID  `). Assert row count >= the table minimum.
    - c. If it PASSES: `mv` the staged file to `<Dump>/YYYYMMDD_<Name>.xlsx` (same-device rename, allowed). Done.
    - d. If it FAILS: leave it as the hidden `.incoming_` file (you cannot delete it) and mark FAILED. The hidden name matches no skill's glob, so it cannot poison downstream selection.
-   - e. Do NOT try to delete the raw download from `<Dump>/Downloads/` (blocked, and harmless — its name doesn't match the skill patterns).
+   - e. **Sweep the raw download to Trash (pass or fail):** `mv` the raw crosstab from `<Dump>/Downloads/` into `<Dump>/Downloads/Trash/`. This is a same-device move, so the source is actually removed and `Downloads/` is left clean for the next file's intake. The Dump-root finalized file — never the raw download — is the deliverable. (Pre-1.1 runs left these to accumulate because delete was blocked; the `Trash/` folder now makes cleanup possible.)
 
 ## Do NOT touch
 
 - `Expenditure_Details_FY17` through `FY26` — closed years, permanently frozen.
 - `nsf_herd_syracuse_*` — updated manually by Duncan.
-- Never delete anything from the destination folder (you can't anyway).
+- Never move, rename, or trash anything in the **Dump root** — the dated `YYYYMMDD_*` deliverables, the frozen FY files, or the NSF HERD files. The *only* sanctioned cleanup is sweeping raw `Downloads/` crosstabs into `Downloads/Trash/` (step 7e).
 
 ## Manifest — required every run
 
@@ -140,4 +143,4 @@ Lead with failures. If any file failed, say so in the first line. State plainly 
 
 ## Operational prerequisite (outside this task)
 
-The "Claude" Chrome profile must be running with the Claude extension connected at run time. Keep that profile open or add it to login items. If it is not connected, Step 0 will stop the run rather than silently use the wrong profile.
+The "Claude" Chrome profile must be running with the Claude extension connected at run time. Keep that profile open or add it to login items. If it is not connected, Step 0 will stop the run rather than silently use the wrong profile. **Keep *only* the Claude profile connected if you can:** when multiple Chrome profiles are connected the tool layer tries to make the run ask which one to use, which an unattended run cannot answer. Step 0 handles that by probing each candidate silently, but a single connected profile avoids the ambiguity and the wasted probing.
